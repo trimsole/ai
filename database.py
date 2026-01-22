@@ -3,7 +3,7 @@ Database module for managing PostgreSQL database operations.
 """
 import asyncpg
 import asyncio
-import datetime  # Добавлено для работы с датами
+import datetime
 from typing import Optional
 
 class Database:
@@ -13,20 +13,19 @@ class Database:
 
     async def init_db(self):
         """Initialize database connection and tables."""
-        # Создаем пул соединений
         self.pool = await asyncpg.create_pool(self.db_url)
         
         async with self.pool.acquire() as conn:
-            # Таблица пользователей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS verified_users (
                     tg_id BIGINT PRIMARY KEY,
                     pocket_id TEXT NOT NULL UNIQUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    daily_usage INTEGER DEFAULT 0,
+                    last_usage_date DATE DEFAULT CURRENT_DATE
                 )
             """)
             
-            # Таблица кэша
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS cache_ids (
                     pocket_id TEXT PRIMARY KEY,
@@ -34,61 +33,58 @@ class Database:
                 )
             """)
 
-            # --- МИГРАЦИЯ: Добавляем колонки для лимитов, если их нет ---
-            try:
-                await conn.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS daily_usage INTEGER DEFAULT 0")
-                await conn.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS last_usage_date DATE DEFAULT CURRENT_DATE")
-            except Exception as e:
-                print(f"Migration warning (might be ok): {e}")
-
     async def close(self):
-        """Close the database connection pool."""
         if self.pool:
             await self.pool.close()
 
-    # --- НОВАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ЛИМИТОВ ---
+    # --- ИЗМЕНЕННАЯ ЛОГИКА ЛИМИТОВ ---
+
     async def check_limit(self, tg_id: int, limit: int = 5) -> dict:
         """
-        Проверяет, можно ли пользователю сделать анализ.
-        Возвращает словарь: {'allowed': bool, 'remaining': int, 'error': str}
+        Только ПРОВЕРЯЕТ, можно ли делать анализ.
+        Сбрасывает счетчик, если наступил новый день.
+        НЕ увеличивает счетчик.
         """
         today = datetime.date.today()
 
         async with self.pool.acquire() as conn:
-            # 1. Получаем данные пользователя
             row = await conn.fetchrow(
                 "SELECT daily_usage, last_usage_date FROM verified_users WHERE tg_id = $1", 
                 tg_id
             )
             
-            # Если пользователя нет в базе (не прошел верификацию в боте)
             if not row:
                 return {'allowed': False, 'remaining': 0, 'error': 'User not found'}
 
             current_usage = row['daily_usage']
             last_date = row['last_usage_date']
 
-            # 2. Если дата в базе старая (вчера и раньше) — сбрасываем счетчик
+            # 1. Если новый день — сбрасываем счетчик на 0 (но не прибавляем 1)
             if last_date < today:
                 await conn.execute(
-                    "UPDATE verified_users SET daily_usage = 1, last_usage_date = $1 WHERE tg_id = $2",
+                    "UPDATE verified_users SET daily_usage = 0, last_usage_date = $1 WHERE tg_id = $2",
                     today, tg_id
                 )
-                return {'allowed': True, 'remaining': limit - 1}
+                return {'allowed': True, 'remaining': limit} # Весь лимит доступен
 
-            # 3. Если дата сегодняшняя, проверяем лимит
+            # 2. Если день тот же, просто проверяем
             if current_usage < limit:
-                # Лимит есть, увеличиваем счетчик
-                await conn.execute(
-                    "UPDATE verified_users SET daily_usage = daily_usage + 1 WHERE tg_id = $1",
-                    tg_id
-                )
-                return {'allowed': True, 'remaining': limit - (current_usage + 1)}
+                return {'allowed': True, 'remaining': limit - current_usage}
             
-            # 4. Лимит исчерпан
+            # 3. Лимит исчерпан
             return {'allowed': False, 'remaining': 0, 'error': 'Limit reached'}
 
-    # ... Остальные старые методы без изменений ...
+    async def increment_usage(self, tg_id: int):
+        """
+        Увеличивает счетчик на 1. Вызывается ТОЛЬКО после успеха.
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE verified_users SET daily_usage = daily_usage + 1 WHERE tg_id = $1",
+                tg_id
+            )
+
+    # --- Остальные методы без изменений ---
     async def is_user_verified(self, tg_id: int) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT 1 FROM verified_users WHERE tg_id = $1", tg_id)
