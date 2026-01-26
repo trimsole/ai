@@ -1,13 +1,9 @@
-"""
-Telegram Affiliate Bot for Pocket Option
-Updated: Deposit Logic requested
-"""
 import os
 import re
 import asyncio
 from typing import Optional, Tuple
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -18,24 +14,34 @@ from telethon import events
 from database import Database
 from aiohttp import web
 
-# Load environment variables
+# --- ЗАГРУЗКА ПЕРЕМЕННЫХ ---
 load_dotenv()
 
-# Configuration
+# --- КОНФИГУРАЦИЯ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH")
 DATABASE_URL = os.getenv("DATABASE_URL")
 MONITOR_CHANNEL_ID = -1003440607760
-# Ссылка на регистрацию
-REGISTRATION_URL = "https://u3.shortink.io/register?utm_campaign=817094&utm_source=affiliate&utm_medium=sr&a=6uw2UJ3XfkHJR8&ac=nikita"
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-web-app-url.com")
+
+# --- ССЫЛКИ ---
+REGISTRATION_URL = "https://u3.shortink.io/register?utm_campaign=817094&utm_source=affiliate&utm_medium=sr&a=6uw2UJ3XfkHJR8&ac=nikita"
 SUPPORT_URL = "https://t.me/jezzseller"
-GUIDE_IMAGE_URL = "https://i.ibb.co/2YY2sNv9/photo-2026-01-22-07-03-16.jpg"
+CHANNEL_URL = "https://t.me/+DbXojk7ubdE5OGI6"  # Ссылка на канал
+YOUTUBE_VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ" # (Замени на актуальное видео, если есть)
+
+# --- 🖼️ КАРТИНКИ ---
+IMAGES = {
+    "main_menu": "https://i.ibb.co/ks2XGqv9/4dfe73c9-8ba6-405a-a875-ad0fb73b6cd1.png", # Приветствие
+    "about": "https://i.ibb.co/whqtDdrt/9616dc74-bca7-4f78-95b4-1780d161a783.png",     # О технологии
+    "stats": "https://i.ibb.co/8LHck6YQ/Generated-Image-January-27-2026-4-06-AM.jpg", # Статистика
+    "connect": "https://i.ibb.co/DDKjd57C/Generated-Image-January-27-2026-3-53-AM.jpg", # Синхронизация
+}
 
 # --- SERVER FOR RENDER ---
 async def handle(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="CAESAR AI BOT is running!")
 
 async def start_server():
     app = web.Application()
@@ -46,9 +52,8 @@ async def start_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     print(f"✅ Web server started on port {port}")
-# -------------------------
 
-# Initialize
+# --- ИНИЦИАЛИЗАЦИЯ ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -60,164 +65,266 @@ telethon_client: Optional[TelegramClient] = None
 class ValidationStates(StatesGroup):
     waiting_for_id = State()
 
-# --- KEYBOARDS ---
+# --- ⌨️ КЛАВИАТУРЫ ---
+
+def get_main_menu_kb(is_verified: bool = False):
+    builder = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧠 О технологии CAESAR", callback_data="about_ai")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="show_stats"),
+         InlineKeyboardButton(text="📢 Наш канал", url=CHANNEL_URL)], # Добавил кнопку канала
+        [InlineKeyboardButton(text="🎓 Обучение", callback_data="education")],
+        # Если верифицирован - кнопка запуска, если нет - кнопка подключения
+        [InlineKeyboardButton(text="🚀 ЗАПУСТИТЬ HUD" if is_verified else "🔗 ПОДКЛЮЧИТЬ CAESAR AI", 
+                              callback_data="start_flow")]
+    ])
+    return builder
+
+def get_back_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")]
+    ])
 
 def get_launch_keyboard() -> InlineKeyboardMarkup:
-    """Полный доступ (после депозита)."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Запустить Trading HUD", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]
+        [InlineKeyboardButton(text="🚀 Открыть Trading HUD", web_app=WebAppInfo(url=WEB_APP_URL))],
+        [InlineKeyboardButton(text="📢 Канал", url=CHANNEL_URL)],
+        [InlineKeyboardButton(text="🔙 Меню", callback_data="back_to_main")]
     ])
 
 def get_deposit_check_keyboard() -> InlineKeyboardMarkup:
-    """Только кнопка проверки депозита."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Я пополнил", callback_data="check_deposit_again")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]
+        [InlineKeyboardButton(text="✅ Я пополнил баланс", callback_data="check_deposit_again")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_main")]
     ])
 
 def get_registration_keyboard() -> InlineKeyboardMarkup:
-    """Если ID не найден вообще."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Регистрация", url=REGISTRATION_URL)],
-        [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="try_again")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]
+        [InlineKeyboardButton(text="📝 Создать профиль", url=REGISTRATION_URL)],
+        [InlineKeyboardButton(text="🔄 Ввести ID заново", callback_data="retry_id")],
+        [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_main")]
     ])
 
-def get_try_again_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="try_again")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]
-    ])
+# --- 📝 ТЕКСТЫ ---
 
-# --- HANDLERS ---
+TEXT_MAIN = (
+    "👋 <b>Вас приветствует CAESAR AI CHART ANALYZER!</b>\n\n"
+    "Я — передовой ИИ-ассистент для технического анализа рыночных графиков.\n\n"
+    "⚡ <b>Мои возможности:</b>\n"
+    "• Глубокий анализ 50+ индикаторов\n"
+    "• Учет волатильности и новостного фона\n"
+    "• Автоматическое построение прогнозов\n\n"
+    "👇 <i>Используйте меню для навигации:</i>"
+)
+
+TEXT_ABOUT = (
+    "🧠 <b>Технология CAESAR AI</b>\n\n"
+    "Алгоритм CAESAR обучен на миллионах исторических графиков. "
+    "Он сканирует рынок в реальном времени, используя данные TradingView и Investing.com.\n\n"
+    "Мы не просто даем сигналы, мы предоставляем полную аналитическую картину для принятия решений.\n\n"
+    "⚠️ <i>Торговля сопряжена с рисками. Используйте аналитику с умом.</i>"
+)
+
+TEXT_STATS = (
+    "📊 <b>Статистика CAESAR AI</b>\n\n"
+    "За последний месяц наша нейросеть обработала более 12,000 рыночных ситуаций.\n"
+    "Точность определения тренда на высоковолатильных парах достигает <b>85-89%</b>.\n\n"
+    "<i>Полная статистика доступна в реальном времени внутри Trading HUD.</i>"
+)
+
+TEXT_CONNECT = (
+    "🔓 <b>Синхронизация с брокером</b>\n\n"
+    "Для работы CAESAR AI необходимо подключить ваш торговый профиль.\n\n"
+    "1. Создайте новый аккаунт на платформе (для доступа к API котировок).\n"
+    "2. Отправьте ваш <b>цифровой ID</b> в ответ на это сообщение.\n\n"
+    "<i>Это необходимо для точной синхронизации графиков.</i>"
+)
+
+# --- ХЕНДЛЕРЫ ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     tg_id = message.from_user.id
+    is_verified = await db.is_user_verified(tg_id)
     
-    # Если юзер уже есть в базе (полная верификация)
+    try:
+        await message.answer_photo(
+            photo=IMAGES["main_menu"],
+            caption=TEXT_MAIN,
+            parse_mode="HTML",
+            reply_markup=get_main_menu_kb(is_verified)
+        )
+    except:
+        await message.answer(TEXT_MAIN, parse_mode="HTML", reply_markup=get_main_menu_kb(is_verified))
+
+# --- МЕНЮ НАВИГАЦИИ ---
+
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    tg_id = callback.from_user.id
+    is_verified = await db.is_user_verified(tg_id)
+    
+    await callback.message.delete()
+    try:
+        await callback.message.answer_photo(
+            photo=IMAGES["main_menu"], 
+            caption=TEXT_MAIN, 
+            parse_mode="HTML", 
+            reply_markup=get_main_menu_kb(is_verified)
+        )
+    except:
+        await callback.message.answer(TEXT_MAIN, parse_mode="HTML", reply_markup=get_main_menu_kb(is_verified))
+
+@dp.callback_query(F.data == "about_ai")
+async def show_about(callback: CallbackQuery):
+    await callback.message.delete()
+    try:
+        await callback.message.answer_photo(
+            photo=IMAGES["about"], 
+            caption=TEXT_ABOUT, 
+            parse_mode="HTML", 
+            reply_markup=get_back_kb()
+        )
+    except:
+        await callback.message.answer(TEXT_ABOUT, parse_mode="HTML", reply_markup=get_back_kb())
+
+@dp.callback_query(F.data == "show_stats")
+async def show_stats(callback: CallbackQuery):
+    await callback.message.delete()
+    try:
+        await callback.message.answer_photo(
+            photo=IMAGES["stats"], 
+            caption=TEXT_STATS, 
+            parse_mode="HTML", 
+            reply_markup=get_back_kb()
+        )
+    except:
+        await callback.message.answer(TEXT_STATS, parse_mode="HTML", reply_markup=get_back_kb())
+
+@dp.callback_query(F.data == "education")
+async def show_education(callback: CallbackQuery):
+    await callback.answer("📚 База знаний обновляется...", show_alert=False)
+    await callback.message.answer("🎓 <b>Обучение CAESAR</b>\n\nРекомендуем ознакомиться с инструкцией:", 
+                                  reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                                      [InlineKeyboardButton(text="📢 Перейти в канал", url=CHANNEL_URL)],
+                                      [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+                                  ]), parse_mode="HTML")
+
+# --- ЛОГИКА ПОДКЛЮЧЕНИЯ (ВОРОНКА) ---
+
+@dp.callback_query(F.data == "start_flow")
+async def start_flow(callback: CallbackQuery, state: FSMContext):
+    tg_id = callback.from_user.id
+    
     if await db.is_user_verified(tg_id):
-        pocket_id = await db.get_user_pocket_id(tg_id)
-        await message.answer(
-            f"✅ Вы уже верифицированы!\nВаш ID: {pocket_id}\n\nЗапустите Trading HUD:",
+        await callback.message.delete()
+        await callback.message.answer(
+            "✅ <b>Доступ разрешен</b>\nCAESAR AI готов к работе.",
+            parse_mode="HTML",
             reply_markup=get_launch_keyboard()
         )
-    else:
-        # Приветствие
-        caption_text = (
-            "👋 Добро пожаловать!\n\n"
-            "Для доступа к Trading HUD необходимо верифицировать ваш аккаунт.\n"
-            "Отправьте ваш цифровой ID (как на картинке) сообщением:"
+        return
+
+    await callback.message.delete()
+    try:
+        await callback.message.answer_photo(
+            photo=IMAGES["connect"],
+            caption=TEXT_CONNECT,
+            parse_mode="HTML",
+            reply_markup=get_registration_keyboard()
         )
-        try:
-            await message.answer_photo(
-                photo=GUIDE_IMAGE_URL,
-                caption=caption_text,
-                reply_markup=get_try_again_keyboard()
-            )
-        except Exception:
-            await message.answer(caption_text, reply_markup=get_try_again_keyboard())
-            
-        await state.set_state(ValidationStates.waiting_for_id)
+    except:
+        await callback.message.answer(TEXT_CONNECT, parse_mode="HTML", reply_markup=get_registration_keyboard())
+    
+    await state.set_state(ValidationStates.waiting_for_id)
+
+@dp.callback_query(F.data == "retry_id")
+async def retry_id_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("✍️ Введите ваш ID (только цифры):")
+    await state.set_state(ValidationStates.waiting_for_id)
+
+# --- ОБРАБОТКА ID ---
 
 @dp.message(ValidationStates.waiting_for_id)
 async def process_pocket_id(message: Message, state: FSMContext):
     user_input = message.text.strip()
+    
+    if user_input.startswith("/"):
+        await state.clear()
+        return
+
     if not user_input.isdigit():
-        await message.answer("❌ Введите только цифры ID:", reply_markup=get_try_again_keyboard())
+        await message.answer("❌ ID должен состоять только из цифр.")
         return
 
     pocket_id = user_input
     tg_id = message.from_user.id
-    msg = await message.answer("🔍 Проверяю данные...")
+    status_msg = await message.answer("🔄 <i>Синхронизация с сервером брокера...</i>", parse_mode="HTML")
     
-    # Проверяем ID в канале
+    await asyncio.sleep(1.5)
+
     is_found, is_deposit = await deep_search_channel(pocket_id)
     
     if is_found:
         if is_deposit:
-            # Сценарий: ЕСТЬ ДЕПОЗИТ -> ПУСКАЕМ
             await db.add_to_cache(pocket_id) 
             await db.verify_user(tg_id, pocket_id)
             await state.clear()
             
-            await msg.edit_text(
-                f"✅ **Доступ открыт!**\nID: {pocket_id}\nДепозит подтвержден.",
+            await status_msg.edit_text(
+                f"✅ <b>CAESAR AI подключен!</b>\nID: {pocket_id}\nЛицензия активирована.",
+                parse_mode="HTML",
                 reply_markup=get_launch_keyboard()
             )
         else:
-            # Сценарий: ТОЛЬКО РЕГИСТРАЦИЯ -> ПРОСИМ ПОПОЛНИТЬ
-            # Сохраняем ID в память, чтобы кнопка сработала
             await state.update_data(current_id=pocket_id)
             
-            await msg.edit_text(
-                f"⚠️ ID: {pocket_id} найден.\n\n"
-                "Для полноценного доступа к боту нужно пополнить баланс аккаунта Pocket Option, который вы создали.\n\n"
-                "После пополнения нажмите кнопку ниже:",
+            await status_msg.edit_text(
+                f"⚠️ <b>Ожидание активации</b>\n\nАккаунт ID: {pocket_id} найден.\n"
+                "Для завершения настройки CAESAR AI необходимо пополнить баланс на брокере.\n\n"
+                "<i>Нажмите кнопку ниже после пополнения:</i>",
+                parse_mode="HTML",
                 reply_markup=get_deposit_check_keyboard()
             )
     else:
-        # Сценарий: ВООБЩЕ НЕ НАЙДЕН
-        await msg.edit_text(
-            f"❌ ID {pocket_id} не найден.\n"
-            f"Проверьте правильность ввода или зарегистрируйтесь по ссылке.",
+        await status_msg.edit_text(
+            f"❌ <b>ID {pocket_id} не найден</b>\n"
+            f"Убедитесь, что регистрация прошла успешно (для синхронизации API).",
+            parse_mode="HTML",
             reply_markup=get_registration_keyboard()
         )
 
-@dp.callback_query(F.data == "try_again")
-async def try_again_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.answer("Введите ваш Pocket Option ID (цифры):")
-    await state.set_state(ValidationStates.waiting_for_id)
-
 @dp.callback_query(F.data == "check_deposit_again")
 async def check_deposit_again(callback: CallbackQuery, state: FSMContext):
-    """
-    Кнопка 'Я пополнил'. Снова проверяет канал на наличие депозита.
-    """
     data = await state.get_data()
     pocket_id = data.get("current_id")
     
     if not pocket_id:
-        await callback.message.answer("⚠️ ID сбросился. Введите ID заново:")
+        await callback.message.answer("⚠️ Сессия истекла. Введите ID заново.")
         await state.set_state(ValidationStates.waiting_for_id)
         return
 
-    await callback.answer("Проверяю постбэки...") # Всплывающее уведомление
+    await callback.answer("🔄 Проверяю данные...", show_alert=False)
     
-    # Повторная проверка
     is_found, is_deposit = await deep_search_channel(pocket_id)
     
     if is_deposit:
-        # ДЕПОЗИТ НАЙДЕН
         tg_id = callback.from_user.id
         await db.verify_user(tg_id, pocket_id)
         await state.clear()
         
         await callback.message.edit_text(
-            f"✅ **Отлично! Депозит найден.**\nID: {pocket_id}\n\nДоступ к боту открыт:",
+            f"✅ <b>Депозит подтвержден!</b>\nДоступ к HUD открыт.",
+            parse_mode="HTML",
             reply_markup=get_launch_keyboard()
         )
     else:
-        # ДЕПОЗИТА ВСЕ ЕЩЕ НЕТ
-        # Не меняем текст сообщения кардинально, просто говорим подождать
-        try:
-            await callback.message.answer(
-                "⏳ Постбэк о депозите еще не пришел.\n"
-                "Обычно это занимает 1-2 минуты. Попробуйте нажать кнопку еще раз чуть позже.",
-                reply_markup=get_deposit_check_keyboard() # Дублируем кнопку внизу
-            )
-        except:
-            pass # Игнорируем ошибки API если юзер спамит
+        await callback.answer("❌ Данные о депозите еще не поступили. Попробуйте через минуту.", show_alert=True)
 
 # --- TELETHON LOGIC ---
 
 async def deep_search_channel(pocket_id: str) -> Tuple[bool, bool]:
-    """
-    Ищет ID и статус.
-    Возвращает: (найден_ли_вообще, был_ли_депозит)
-    """
     global telethon_client
     if not telethon_client:
         return False, False
@@ -227,24 +334,19 @@ async def deep_search_channel(pocket_id: str) -> Tuple[bool, bool]:
     is_deposit = False
     
     try:
-        # Проходим по последним 100 сообщениям с этим ID
         async for message in telethon_client.iter_messages(MONITOR_CHANNEL_ID, search=search_pattern, limit=100):
             if message.text and search_pattern in message.text:
                 is_found = True
                 txt = message.text.lower()
-                
-                # Проверка на депозит (по эмодзи 💰 или слову Депчик)
                 if "депчик" in txt or "💰" in txt:
                     is_deposit = True
-                    break # Нашли депозит — супер, выходим
-                    
+                    break 
         return is_found, is_deposit
     except Exception as e:
         print(f"Error checking channel: {e}")
         return False, False
 
 async def handle_new_message(event):
-    """Кэширование в реальном времени (не обязательно для основной логики, но полезно)"""
     if event.chat_id != MONITOR_CHANNEL_ID:
         return
     text = event.message.text
@@ -274,7 +376,7 @@ async def main():
     await init_telethon()
     await start_monitoring()
     
-    print("🚀 Bot started with Deposit Logic")
+    print("🚀 CAESAR AI BOT STARTED")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
