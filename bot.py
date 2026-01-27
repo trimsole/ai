@@ -217,10 +217,10 @@ LANGUAGES = {
 }
 
 # --- HELPER FUNCTIONS ---
-async def get_user_language(tg_id: int) -> str:
-    """Получить язык пользователя из БД"""
-    lang = await db.get_user_language(tg_id)
-    return lang if lang in LANGUAGES else "ru"
+async def get_user_language(state: FSMContext) -> str:
+    """Получить язык пользователя из state"""
+    data = await state.get_data()
+    return data.get("language", "ru")
 
 def get_text(lang: str, key: str, *args) -> str:
     """Получить текст на нужном языке"""
@@ -285,46 +285,26 @@ def get_registration_keyboard(lang: str) -> InlineKeyboardMarkup:
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    tg_id = message.from_user.id
     
-    # Проверяем, выбран ли язык
-    user_lang = await get_user_language(tg_id)
-    
-    if not user_lang or user_lang not in LANGUAGES:
-        # Показываем выбор языка
-        await message.answer(
-            LANGUAGES["ru"]["choose_language"],
-            reply_markup=get_language_keyboard()
-        )
-        await state.set_state(LanguageStates.choosing_language)
-    else:
-        # Показываем главное меню
-        is_verified = await db.is_user_verified(tg_id)
-        try:
-            await message.answer_photo(
-                photo=IMAGES["main_menu"],
-                caption=get_text(user_lang, "main_menu"),
-                parse_mode="HTML",
-                reply_markup=get_main_menu_kb(user_lang, is_verified)
-            )
-        except:
-            await message.answer(
-                get_text(user_lang, "main_menu"),
-                parse_mode="HTML",
-                reply_markup=get_main_menu_kb(user_lang, is_verified)
-            )
+    # Всегда показываем выбор языка при /start
+    await message.answer(
+        LANGUAGES["ru"]["choose_language"],
+        reply_markup=get_language_keyboard()
+    )
+    await state.set_state(LanguageStates.choosing_language)
 
 # --- ВЫБОР ЯЗЫКА ---
 
 @dp.callback_query(F.data.startswith("lang_"))
 async def language_selected(callback: CallbackQuery, state: FSMContext):
     lang = callback.data.split("_")[1]
-    tg_id = callback.from_user.id
     
-    await db.set_user_language(tg_id, lang)
+    # Сохраняем язык в state
+    await state.update_data(language=lang)
     await callback.answer(get_text(lang, "language_changed"), show_alert=True)
     
     # Показываем главное меню
+    tg_id = callback.from_user.id
     is_verified = await db.is_user_verified(tg_id)
     await callback.message.delete()
     
@@ -343,22 +323,23 @@ async def language_selected(callback: CallbackQuery, state: FSMContext):
         )
     
     await state.clear()
+    await state.update_data(language=lang)
 
 @dp.callback_query(F.data == "change_language")
-async def change_language(callback: CallbackQuery):
-    lang = await get_user_language(callback.from_user.id)
+async def change_language(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(state)
     await callback.message.answer(
         get_text(lang, "choose_language"),
         reply_markup=get_language_keyboard()
     )
+    await state.set_state(LanguageStates.choosing_language)
 
 # --- МЕНЮ НАВИГАЦИИ ---
 
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
     tg_id = callback.from_user.id
-    lang = await get_user_language(tg_id)
+    lang = await get_user_language(state)
     is_verified = await db.is_user_verified(tg_id)
     
     await callback.message.delete()
@@ -377,8 +358,8 @@ async def back_to_main(callback: CallbackQuery, state: FSMContext):
         )
 
 @dp.callback_query(F.data == "about_ai")
-async def show_about(callback: CallbackQuery):
-    lang = await get_user_language(callback.from_user.id)
+async def show_about(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(state)
     await callback.message.delete()
     try:
         await callback.message.answer_photo(
@@ -395,8 +376,8 @@ async def show_about(callback: CallbackQuery):
         )
 
 @dp.callback_query(F.data == "show_stats")
-async def show_stats(callback: CallbackQuery):
-    lang = await get_user_language(callback.from_user.id)
+async def show_stats(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(state)
     await callback.message.delete()
     try:
         await callback.message.answer_photo(
@@ -413,8 +394,8 @@ async def show_stats(callback: CallbackQuery):
         )
 
 @dp.callback_query(F.data == "education")
-async def show_education(callback: CallbackQuery):
-    lang = await get_user_language(callback.from_user.id)
+async def show_education(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(state)
     await callback.answer("📚", show_alert=False)
     await callback.message.answer(
         get_text(lang, "education_text"),
@@ -430,7 +411,7 @@ async def show_education(callback: CallbackQuery):
 @dp.callback_query(F.data == "start_flow")
 async def start_flow(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
-    lang = await get_user_language(tg_id)
+    lang = await get_user_language(state)
     
     if await db.is_user_verified(tg_id):
         await callback.message.delete()
@@ -460,7 +441,7 @@ async def start_flow(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "retry_id")
 async def retry_id_handler(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_language(callback.from_user.id)
+    lang = await get_user_language(state)
     await callback.message.answer(get_text(lang, "enter_id"))
     await state.set_state(ValidationStates.waiting_for_id)
 
@@ -469,10 +450,9 @@ async def retry_id_handler(callback: CallbackQuery, state: FSMContext):
 @dp.message(ValidationStates.waiting_for_id)
 async def process_pocket_id(message: Message, state: FSMContext):
     user_input = message.text.strip()
-    lang = await get_user_language(message.from_user.id)
+    lang = await get_user_language(state)
     
     if user_input.startswith("/"):
-        await state.clear()
         return
 
     if not user_input.isdigit():
@@ -491,7 +471,6 @@ async def process_pocket_id(message: Message, state: FSMContext):
         if is_deposit:
             await db.add_to_cache(pocket_id) 
             await db.verify_user(tg_id, pocket_id)
-            await state.clear()
             
             await status_msg.edit_text(
                 get_text(lang, "verified", pocket_id),
@@ -517,7 +496,7 @@ async def process_pocket_id(message: Message, state: FSMContext):
 async def check_deposit_again(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     pocket_id = data.get("current_id")
-    lang = await get_user_language(callback.from_user.id)
+    lang = await get_user_language(state)
     
     if not pocket_id:
         await callback.message.answer(get_text(lang, "session_expired"))
@@ -531,7 +510,6 @@ async def check_deposit_again(callback: CallbackQuery, state: FSMContext):
     if is_deposit:
         tg_id = callback.from_user.id
         await db.verify_user(tg_id, pocket_id)
-        await state.clear()
         
         await callback.message.edit_text(
             get_text(lang, "deposit_confirmed"),
