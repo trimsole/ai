@@ -28,7 +28,7 @@ WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-web-app-url.com")
 # --- ССЫЛКИ ---
 REGISTRATION_URL = "https://u3.shortink.io/register?utm_campaign=817094&utm_source=affiliate&utm_medium=sr&a=6uw2UJ3XfkHJR8&ac=nikita"
 SUPPORT_URL = "https://t.me/jezzseller"
-CHANNEL_URL = "https://t.me/jezzseller"
+CHANNEL_URL = "https://youtu.be/4xU63QT-jVY"
 
 # --- 🖼️ КАРТИНКИ ---
 IMAGES = {
